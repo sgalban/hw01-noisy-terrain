@@ -136,6 +136,10 @@ int getBiome(float temperature, float moisture) {
     }
 }
 
+float getHeight(vec2 pos) {
+    return pow(fbm(pos, 6, 0.08), 3.0) * 10.0;
+}
+
 void main() {
     /*float moisture = perlin(vs_Pos.xz + u_PlanePos, 0.01, SEED2 + vec2(0.4));
     float temperature = perlin(vs_Pos.xz + u_PlanePos, 0.015, SEED2 + vec2(0.2));
@@ -152,10 +156,16 @@ void main() {
     }*/
     int biome = 0;
     fs_Biome = float(biome);
-    float vertHeight = pow(fbm(vs_Pos.xz + u_PlanePos, 7, 0.1), 3.0) * 10.0;
+    float vertHeight = getHeight(vs_Pos.xz + u_PlanePos);
     vec4 modelposition = vec4(vs_Pos.x, vertHeight, vs_Pos.z, 1);
     fs_Pos = modelposition.xyz;
 
     modelposition = u_Model * modelposition;
     gl_Position = u_ViewProj * modelposition;
+
+    /*const float DPOS = 0.01;
+    vec3 p1 = vec3(vs_Pos.x, vertHeight, vs_Pos.z);
+    vec3 p2 = vec3(vs_Pos.x + DPOS, getHeight(vs_Pos.xz + vec2(DPOS, 0.0) + u_PlanePos), vs_Pos.z);
+    vec3 p3 = vec3(vs_Pos.x, getHeight(vs_Pos.xz + vec2(0.0, DPOS) + u_PlanePos), vs_Pos.z + DPOS);
+    fs_Nor = vec4(normalize(cross(p3 - p1, p2 - p1)), 0.0);*/
 }

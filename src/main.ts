@@ -22,6 +22,7 @@ let aPressed: boolean;
 let sPressed: boolean;
 let dPressed: boolean;
 let planePos: vec2;
+let time: number;
 
 function loadScene() {
   square = new Square(vec3.fromValues(0, 0, 0));
@@ -34,6 +35,8 @@ function loadScene() {
   sPressed = false;
   dPressed = false;
   planePos = vec2.fromValues(0,0);
+
+  time = 0;
 }
 
 function main() {
@@ -137,6 +140,9 @@ function main() {
     camera.update();
     stats.begin();
     gl.viewport(0, 0, window.innerWidth, window.innerHeight);
+    lambert.setTime(time);
+    flat.setTime(time);
+    time++;
     renderer.clear();
     processKeyPresses();
     renderer.render(camera, lambert, [
