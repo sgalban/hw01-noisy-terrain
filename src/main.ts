@@ -11,8 +11,9 @@ import ShaderProgram, {Shader} from './rendering/gl/ShaderProgram';
 // Define an object with application parameters and button callbacks
 // This will be referred to by dat.GUI's functions that add GUI elements.
 const controls = {
-  tesselations: 5,
-  'Load Scene': loadScene, // A function pointer, essentially
+    "Biome Size": 1.0,
+    "Lighting" : false,
+    "Time Multiplier": 1.0
 };
 
 let square: Square;
@@ -85,6 +86,9 @@ function main() {
 
   // Add controls to the gui
   const gui = new DAT.GUI();
+  gui.add(controls, "Biome Size", 0.5, 5.0);
+  gui.add(controls, "Lighting");
+  gui.add(controls, "Time Multiplier", -25.0, 25.0);
 
   // get canvas and webgl context
   const canvas = <HTMLCanvasElement> document.getElementById('canvas');
@@ -141,8 +145,10 @@ function main() {
     stats.begin();
     gl.viewport(0, 0, window.innerWidth, window.innerHeight);
     lambert.setTime(time);
+    lambert.setBiomeSize(controls["Biome Size"]);
     flat.setTime(time);
-    time++;
+    lambert.setLightingOn(controls["Lighting"]);
+    time += controls["Time Multiplier"];
     renderer.clear();
     processKeyPresses();
     renderer.render(camera, lambert, [

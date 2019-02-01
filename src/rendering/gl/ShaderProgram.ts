@@ -31,6 +31,8 @@ class ShaderProgram {
   unifColor: WebGLUniformLocation;
   unifPlanePos: WebGLUniformLocation;
   unifTime: WebGLUniformLocation;
+  unifLighting: WebGLUniformLocation;
+  unifBiomeSize: WebGLUniformLocation;
 
   constructor(shaders: Array<Shader>) {
     this.prog = gl.createProgram();
@@ -51,6 +53,8 @@ class ShaderProgram {
     this.unifViewProj   = gl.getUniformLocation(this.prog, "u_ViewProj");
     this.unifPlanePos   = gl.getUniformLocation(this.prog, "u_PlanePos");
     this.unifTime       = gl.getUniformLocation(this.prog, "u_Time");
+    this.unifLighting   = gl.getUniformLocation(this.prog, "u_UseLight");
+    this.unifBiomeSize  = gl.getUniformLocation(this.prog, "u_BiomeSize");
   }
 
   use() {
@@ -92,6 +96,21 @@ class ShaderProgram {
         this.use();
         if (this.unifTime !== -1) {
             gl.uniform1i(this.unifTime, time);
+        }
+    }
+
+    setBiomeSize(size: number) {
+        this.use();
+        if (this.unifBiomeSize !== -1) {
+            gl.uniform1f(this.unifBiomeSize, size);
+        }
+    }
+
+    setLightingOn(lighting: boolean) {
+        this.use();
+        let l = lighting ? 1 : 0;
+        if (this.unifLighting !== -1) {
+            gl.uniform1i(this.unifLighting, l);
         }
     }
 

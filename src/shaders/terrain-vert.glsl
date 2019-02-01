@@ -5,6 +5,8 @@ uniform mat4 u_Model;
 uniform mat4 u_ModelInvTr;
 uniform mat4 u_ViewProj;
 uniform vec2 u_PlanePos; // Our location in the virtual world displayed by the plane
+uniform float u_BiomeSize;
+uniform highp int u_UseLight;
 uniform highp int u_Time;
 
 in vec4 vs_Pos;
@@ -17,9 +19,10 @@ out vec4 fs_Col;
 
 out float fs_Sine;
 out float fs_Moisture;
-out float fs_Temperature;
 
 const vec2 SEED2 = vec2(0.1234, 0.5678);
+
+const float PI = 3.1415926;
 
 float random1( vec2 p , vec2 seed) {
     return fract(sin(dot(p + seed, vec2(127.1, 311.7))) * 43758.5453);
@@ -33,21 +36,6 @@ vec2 random2( vec2 p , vec2 seed) {
     return fract(sin(vec2(dot(p + seed, vec2(311.7, 127.1)), dot(p + seed, vec2(269.5, 183.3)))) * 85734.3545);
 }
 
-float fbm(vec2 pos) {
-    pos /= 10.0;
-    float value = 0.0;
-    float amplitude = 0.5;
-    float frequency = 0.0;
-    float persistence = 0.25;
-
-    for (int i = 0; i < 10; i++) {
-        value += amplitude * random1(pos, vec2(0));
-        pos *= persistence;
-        amplitude *= .5;
-    }
-    return value;
-}
-
 float quinticFalloff(float t) {
     return t * t * t * (t * (6.0 * t - 15.0) + 10.0);
 }
@@ -57,14 +45,13 @@ float cubicFalloff(float t) {
 }
 
 float steepFalloff(float t, float falloffStart, float falloffLength) {
-    if (t >= 1.0 || t > falloffStart + falloffLength) {
-        return 1.0;
-    }
-    if (t < falloffStart) {
-        return 0.0;
-    }
-    float adjusted = (t - falloffStart) / falloffLength;
+    float adjusted = clamp((t - falloffStart) / falloffLength, 0.0, 1.0);
     return quinticFalloff(adjusted);
+}
+
+float cosineSmooth(float t) {
+    float a = (cos(2.0 * PI * t + PI) + 1.0) * 0.5;
+    return a * a;
 }
 
 float perlin (vec2 noisePos, float frequency, vec2 seed) {
@@ -146,6 +133,20 @@ float fbm(vec2 noisePos, int numOctaves, float startFrequency) {
     return totalNoise / normalizer;
 }
 
+float worley(vec2 noisePos, float frequency) {
+    vec2 point = noisePos * frequency;
+    vec2 cell = floor(point);
+
+    // Check the neighboring cells for the closest cell point
+    float closestDistance = 2.0;
+    for (int i = 0; i < 9; i++) {
+        vec2 curCell = cell + vec2(i % 3 - 1, floor(float(i / 3) - 1.0));
+        vec2 cellPoint = vec2(curCell) + random2(vec2(curCell), SEED2);
+        closestDistance = min(closestDistance, distance(cellPoint, point));
+    }
+    return clamp(0.0, 1.0, closestDistance);
+}
+
 float getBiome(float temperature, float moisture) {
     return moisture;
 }
@@ -153,31 +154,48 @@ float getBiome(float temperature, float moisture) {
 float getMountainHeight(vec2 pos) {
     const float MAX_AMPLITUDE = 12.0;
     const float EXTRA_JAGGINESS = 2.0;
-    float terrainFbm = fbm(pos, 6, 0.08);
+    float fmbVal = fbm(pos, 8, 0.08);
+    float perlin = recursivePerlin(pos, 2, 0.08);
 
-    float fmbVal = terrainFbm;
-    float height = fmbVal * fmbVal * fmbVal * MAX_AMPLITUDE;
+    float height = (fmbVal * fmbVal * fmbVal * 0.8 + perlin * perlin * perlin * 0.2) * MAX_AMPLITUDE;
     height = height + (mix(0.0, brownianNoise(pos, SEED2), height / MAX_AMPLITUDE)) * EXTRA_JAGGINESS;
     return height * MAX_AMPLITUDE / (MAX_AMPLITUDE + EXTRA_JAGGINESS);
 }
 
 float getDesertHeight(vec2 pos) {
     const float MAX_AMPLITUDE = 12.0;
-    float mesaFbm = fbm(pos, 6, 0.03);
+    float mesaFbm = fbm(pos, 5, 0.03);
     float dunes = recursivePerlin(pos, 2, 0.1) * MAX_AMPLITUDE * 0.25;
-    float mesas = steepFalloff(mesaFbm, 0.7, 0.1) * MAX_AMPLITUDE;
+    float mesas = steepFalloff(mesaFbm, 0.65, 0.1) * MAX_AMPLITUDE * 0.75;
     return max(dunes, mesas);
 }
 
 float getOceanHeight(vec2 pos) {
     const float MAX_AMPLITUDE = 12.0;
     float largePerlin = recursivePerlin(pos, 2, 0.08);
-    float medPerlin = recursivePerlin(pos, 2, 0.30);
     float islands = (1.0 - steepFalloff(largePerlin, 0.35, 0.2)) * MAX_AMPLITUDE * 0.2;
-    return MAX_AMPLITUDE * 0.09 - islands;
+    float height = MAX_AMPLITUDE * 0.09 - islands; 
+    float waves = 0.0;
+    if (height < -0.5) {
+        float time = float(u_Time) * 0.01;
+        vec2 perturbenceOffset = vec2(5.4 + time, 1.3 + time);
+        vec2 perlinOffset = vec2(time);
+
+        vec2 perturbence = vec2(fbm(pos, 2, 0.3), fbm(pos + perturbenceOffset, 2, 0.3));
+        waves = smoothstep(0.0, perlin(pos - perlinOffset - perturbence, 0.3, SEED2), 1.0 - (height + 1.5)) * 0.3;
+    }
+    return height + waves;
+}
+
+float getSnowyHeight(vec2 pos) {
+    const float MAX_AMPLITUDE = 12.0;
+    float perlin = recursivePerlin(pos, 2, 0.1);
+    float worley = 1.0 - (worley(pos, 0.05) + 0.5 * worley(pos, 0.1));
+    return MAX_AMPLITUDE * (worley * worley * 0.4 + perlin * 0.6);
 }
 
 float getHeight(vec2 pos, float biome) {
+    //return getDesertHeight(pos);
     if (biome < 0.25) {
         return getDesertHeight(pos);
     }
@@ -196,22 +214,21 @@ float getHeight(vec2 pos, float biome) {
 }
 
 void main() {
-    fs_Moisture = quinticFalloff(perlin(vs_Pos.xz + u_PlanePos, 0.005, SEED2 + vec2(0.4)));
-    fs_Temperature = 0.0;//quinticFalloff(perlin(vs_Pos.xz + u_PlanePos, 0.015, SEED2 + vec2(0.2)));
+    fs_Moisture = quinticFalloff(perlin(vs_Pos.xz + u_PlanePos, 0.005 / u_BiomeSize, SEED2 + vec2(0.4)));
+    vec2 noisePos = vs_Pos.xz + u_PlanePos;
 
-    float biome = getBiome(fs_Temperature, fs_Moisture);
-
-    float vertHeight = getHeight(vs_Pos.xz + u_PlanePos, biome);
+    float vertHeight = getHeight(noisePos, fs_Moisture);
     vec4 modelposition = vec4(vs_Pos.x, vertHeight, vs_Pos.z, 1);
     fs_Pos = modelposition.xyz;
 
     modelposition = u_Model * modelposition;
     gl_Position = u_ViewProj * modelposition;
 
-    // Unfortunately, steepness calculations are too slow for my browser
-    /*const float DPOS = 0.01;
-    vec3 p1 = vec3(vs_Pos.x, vertHeight, vs_Pos.z);
-    vec3 p2 = vec3(vs_Pos.x + DPOS, getHeight(vs_Pos.xz + vec2(DPOS, 0.0) + u_PlanePos), vs_Pos.z);
-    vec3 p3 = vec3(vs_Pos.x, getHeight(vs_Pos.xz + vec2(0.0, DPOS) + u_PlanePos), vs_Pos.z + DPOS);
-    fs_Nor = vec4(normalize(cross(p3 - p1, p2 - p1)), 0.0);*/
+    if (u_UseLight > 0) {
+        const float DPOS = 0.01;
+        vec3 p1 = vec3(vs_Pos.x, vertHeight, vs_Pos.z);
+        vec3 p2 = vec3(vs_Pos.x + DPOS, getHeight(noisePos + vec2(DPOS, 0.0), fs_Moisture), vs_Pos.z);
+        vec3 p3 = vec3(vs_Pos.x, getHeight(noisePos + vec2(0.0, DPOS), fs_Moisture), vs_Pos.z + DPOS);
+        fs_Nor = vec4(normalize(cross(p3 - p1, p2 - p1)), 0.0);
+    }
 }

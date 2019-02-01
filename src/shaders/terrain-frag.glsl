@@ -3,6 +3,7 @@ precision highp float;
 
 uniform vec2 u_PlanePos; // Our location in the virtual world displayed by the plane
 uniform highp int u_Time;
+uniform highp int u_UseLight;
 
 in vec3 fs_Pos;
 in vec4 fs_Nor;
@@ -10,7 +11,6 @@ in vec4 fs_Col;
 
 in float fs_Sine;
 
-in float fs_Temperature;
 in float fs_Moisture;
 
 out vec4 out_Col; // This is the final output color that you will see on your
@@ -18,6 +18,8 @@ out vec4 out_Col; // This is the final output color that you will see on your
 
 const vec2 SEED2 = vec2(0.31415, 0.6456);
 const vec3 SEED3 = vec3(0.1, 0.22, 0.31);
+
+const float PI = 3.1415926;
 
 float random1( vec2 p , vec2 seed) {
     return fract(sin(dot(p + seed, vec2(127.1, 311.7))) * 43758.5453);
@@ -132,19 +134,14 @@ float fbm(vec2 noisePos, int numOctaves, float startFrequency) {
 
 float worley(vec2 noisePos, float frequency) {
     vec2 point = noisePos * frequency;
-    ivec2 cell = ivec2(floor(point.x), floor(point.y));
+    vec2 cell = floor(point);
 
     // Check the neighboring cells for the closest cell point
     float closestDistance = 2.0;
-    vec2 closestPoint = vec2(cell) + random2(vec2(cell), SEED2);
     for (int i = 0; i < 9; i++) {
-        ivec2 curCell = cell + ivec2(i % 3 - 1, int(floor(float(i / 3))) - 1);
+        vec2 curCell = cell + vec2(i % 3 - 1, floor(float(i / 3) - 1.0));
         vec2 cellPoint = vec2(curCell) + random2(vec2(curCell), SEED2);
-        float distance = distance(cellPoint, point);
-        if (distance < closestDistance) {
-            closestDistance = distance;
-            closestPoint = cellPoint;
-        }
+        closestDistance = min(closestDistance, distance(cellPoint, point));
     }
     return clamp(0.0, 1.0, closestDistance);
 }
@@ -153,7 +150,7 @@ vec3 getMountainsColor(vec3 pos) {
     float t = min(pos.y * 0.15 + ((fbm(pos.xz, 3, 0.5)) - 0.5) * 0.4, 1.0);
 
     float largeFbm = fbm(fs_Pos.xz + u_PlanePos, 3, 0.075);
-    float smallFbm = fbm(fs_Pos.xz + u_PlanePos, 2, 5.0);
+    float smallPerlin = recursivePerlin(pos.xz, 2, 5.0);
     float mediumPerlin = recursivePerlin(fs_Pos.xz + u_PlanePos, 2, 1.0);
 
     const vec3 COL0 = vec3(0.1, 0.4, 0.07);
@@ -166,7 +163,7 @@ vec3 getMountainsColor(vec3 pos) {
     const vec3 COL7 = vec3(0.4, 0.25, 0.15) * 0.5;
 
 
-    vec3 grassCol = mix(mix(COL0, COL1, smallFbm), COL5, largeFbm);
+    vec3 grassCol = mix(mix(COL0, COL1, smallPerlin), COL5, largeFbm);
     vec3 mudCol = mix(COL2, COL7, mediumPerlin);
     vec3 rockCol = mix(COL3, COL6, mediumPerlin);
 
@@ -190,27 +187,30 @@ vec3 getMountainsColor(vec3 pos) {
 vec3 getDesertColor(vec3 pos) {
     float mediumPerlin = recursivePerlin(pos.xz, 2, 1.0);
     float smallPerlin = recursivePerlin(pos.xy + vec2(pos.z), 2, 2.0);
+    float heightPerturbance = fbm(pos.xz, 3, 0.5) * 0.1;
+    float y = pos.y + heightPerturbance * 20.0;
 
     const vec3 COL1 = vec3(1.0, 0.86, 0.3);
-    const vec3 COL2 = vec3(0.92, 0.82, 0.43);
+    const vec3 COL2 = vec3(0.92, 0.70, 0.43);
     const vec3 COL3 = vec3(0.77, 0.48, 0.24);
     const vec3 COL4 = vec3(0.70, 0.61, 0.34) * 1.2;
+    float heightSine = sin(y * PI) * 0.03;
     vec3 sandCol = mix(COL1, COL2, mediumPerlin) * (pos.y * 0.3 / 3.0 + 0.7);
-    vec3 rockCol = mix(COL3, COL4, smallPerlin);
+    vec3 rockCol = mix(COL3, COL4, smallPerlin) + vec3(y * 0.02, heightSine, heightSine - y * 0.02);
     vec3 topCol = mix(COL1, COL2, smallPerlin);
 
-    float t = pos.y / 12.0;
+    float t = pos.y / 9.0;
     if (t < 0.15) {
         return sandCol;
     }
     else if (t >= 0.15 && t < 0.25) {
         return mix(sandCol, rockCol, quinticFalloff((t - 0.15) / 0.1));
     }
-    else if (t >= 0.25 && t < 0.9) {
+    else if (t >= 0.25 && t < 0.9 - heightPerturbance) {
         return rockCol;
     }
     else {
-        return mix(rockCol, topCol, quinticFalloff((t - 0.9) / 0.1));
+        return mix(rockCol, topCol, quinticFalloff((t - 0.9 + heightPerturbance) / (0.1 + heightPerturbance)));
     }
 }
 
@@ -257,26 +257,14 @@ vec3 getOceanColor(vec3 pos) {
     }
 }
 
-float getBiome(float temperature, float moisture) {
-    return moisture;
-    /*if (temperature > 0.5 && moisture < 0.5) {
-        return 1; // Desert
-    }
-    else {
-        return 0; // Hills
-    }*/
+vec3 getSnowyColor(vec3 pos) {
+    return vec3(worley(pos.xz, 0.2));
+    //return vec3(1.0) * mix(0.7, 1.0, pos.y / 6.0);
 }
 
+
 vec3 getBiomeColor(float biome, vec3 pos) {
-    /*if (biome == 0) {
-        return getMountainsColor(pos);
-    }
-    if (biome == 1) {
-        return getDesertColor(pos);
-    }
-    if (biome == 2) {
-        return getOceanColor(pos);
-    }*/
+    //return getDesertColor(pos);
     if (biome < 0.25) {
         return getDesertColor(pos);
     }
@@ -296,24 +284,60 @@ vec3 getBiomeColor(float biome, vec3 pos) {
 
 float getLambertianFactor(float sunAngle) {
     const float AMBIENT = 0.3;
-    /*if (sunAngle < 0.0 || sunAngle > 180.0) {
-        return AMBIENT;
-    }*/
     vec3 lightDir = vec3(cos(radians(sunAngle)), sin(radians(sunAngle)), 0.0);
     float lamberianFactor = dot(fs_Nor.xyz, lightDir);
     return max(AMBIENT, lamberianFactor);
 }
 
+vec3 cubicInterp(vec3 v1, vec3 v2, float t) {
+    return mix(v1, v2, smoothstep(0.0, 1.0, t));
+}
+
+vec3 getSkyColor(float sunAngle) {
+    vec3 COL1 = vec3(0.08, 0.02, 0.16);
+    vec3 COL2 = vec3(1.00, 0.68, 0.59);
+    vec3 COL3 = vec3(0.21, 0.77, 1.00);
+
+    if (sunAngle < 5.0) {
+        return COL2;
+    }
+    else if (sunAngle >= 5.0 && sunAngle < 30.0) {
+        return cubicInterp(COL2, COL3, (sunAngle - 5.0) / 25.0);
+    }
+    else if (sunAngle >= 30.0 && sunAngle < 150.0) {
+        return COL3;
+    }
+    else if (sunAngle >= 150.0 && sunAngle < 175.0) {
+        return cubicInterp(COL3, COL2, (sunAngle - 150.0) / 25.0);
+    }
+    else if (sunAngle >= 175.0 && sunAngle < 185.0) {
+        return COL2;
+    }
+    else if (sunAngle >= 185.0 && sunAngle < 210.0) {
+        return cubicInterp(COL2, COL1, (sunAngle - 185.0) / 25.0);
+    }
+    else if (sunAngle >= 210.0 && sunAngle < 330.0) {
+        return COL1;
+    }
+    else if (sunAngle >= 330.0 && sunAngle < 355.0) {
+        return cubicInterp(COL1, COL2, (sunAngle - 330.0) / 25.0);
+    }
+    else {
+        return COL2;
+    }
+}
+
 void main() {
     float t = clamp(smoothstep(40.0, 50.0, length(fs_Pos)), 0.0, 1.0); // Distance fog
-    vec3 skyColor = vec3(0.64, 0.91, 1.0);
     vec3 noisePos = fs_Pos + vec3(u_PlanePos.x, 0, u_PlanePos.y);
 
-    float biome = getBiome(fs_Temperature, fs_Moisture);
-    vec3 terrainCol = getBiomeColor(biome, noisePos);
-    //float sunAngle = mod(float(u_Time), 360.0);
-    //float lambert = getLambertianFactor(sunAngle);
-    //terrainCol *= lambert;
+    vec3 terrainCol = getBiomeColor(fs_Moisture, noisePos);
+    float sunAngle = mod(float(u_Time) * 0.1 + 90.0, 360.0);
 
-    out_Col = vec4(mix(terrainCol, skyColor, t), 1.0);
+    if (u_UseLight > 0) {
+        float lambert = getLambertianFactor(sunAngle);
+        terrainCol *= lambert;
+    }
+
+    out_Col = vec4(mix(terrainCol, getSkyColor(sunAngle), t), 1.0);
 }
