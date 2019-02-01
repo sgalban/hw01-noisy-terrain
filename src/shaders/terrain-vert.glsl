@@ -5,6 +5,7 @@ uniform mat4 u_Model;
 uniform mat4 u_ModelInvTr;
 uniform mat4 u_ViewProj;
 uniform vec2 u_PlanePos; // Our location in the virtual world displayed by the plane
+uniform highp int u_Time;
 
 in vec4 vs_Pos;
 in vec4 vs_Nor;
@@ -15,10 +16,10 @@ out vec4 fs_Nor;
 out vec4 fs_Col;
 
 out float fs_Sine;
-out float fs_Biome;
+out float fs_Moisture;
+out float fs_Temperature;
 
 const vec2 SEED2 = vec2(0.1234, 0.5678);
-const float MAX_AMPLITUDE = 40.0;
 
 float random1( vec2 p , vec2 seed) {
     return fract(sin(dot(p + seed, vec2(127.1, 311.7))) * 43758.5453);
@@ -51,6 +52,21 @@ float quinticFalloff(float t) {
     return t * t * t * (t * (6.0 * t - 15.0) + 10.0);
 }
 
+float cubicFalloff(float t) {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float steepFalloff(float t, float falloffStart, float falloffLength) {
+    if (t >= 1.0 || t > falloffStart + falloffLength) {
+        return 1.0;
+    }
+    if (t < falloffStart) {
+        return 0.0;
+    }
+    float adjusted = (t - falloffStart) / falloffLength;
+    return quinticFalloff(adjusted);
+}
+
 float perlin (vec2 noisePos, float frequency, vec2 seed) {
     vec2 pos = noisePos * frequency;
     vec2 cellPos = vec2(floor(pos.x), floor(pos.y));
@@ -65,17 +81,17 @@ float perlin (vec2 noisePos, float frequency, vec2 seed) {
     vec2 posVec2 = pos - corner2;
     vec2 posVec3 = pos - corner3; 
 
-    vec2 gradient0 = normalize(random2(corner0, seed) * (random1(corner0, seed) > 0.5 ? 1.0 : -1.0));
-    vec2 gradient1 = normalize(random2(corner1, seed) * (random1(corner1, seed) > 0.5 ? 1.0 : -1.0));
-    vec2 gradient2 = normalize(random2(corner2, seed) * (random1(corner2, seed) > 0.5 ? 1.0 : -1.0));
-    vec2 gradient3 = normalize(random2(corner3, seed) * (random1(corner3, seed) > 0.5 ? 1.0 : -1.0));
+    vec2 gradient0 = normalize(random2(corner0, seed) * 2.0 - vec2(1.0));
+    vec2 gradient1 = normalize(random2(corner1, seed) * 2.0 - vec2(1.0));
+    vec2 gradient2 = normalize(random2(corner2, seed) * 2.0 - vec2(1.0));
+    vec2 gradient3 = normalize(random2(corner3, seed) * 2.0 - vec2(1.0));
     float val0 = dot(posVec0, gradient0);
     float val1 = dot(posVec1, gradient1);
     float val2 = dot(posVec2, gradient2);
     float val3 = dot(posVec3, gradient3);
 
-    float tx = quinticFalloff(fract(pos.x));
-    float ty = quinticFalloff(fract(pos.y));
+    float tx = cubicFalloff(fract(pos.x));
+    float ty = cubicFalloff(fract(pos.y));
     float lerpedCol = mix(mix(val0, val1, tx), mix(val2, val3, tx), ty);
 
     return (lerpedCol + 1.0) / 2.0;
@@ -118,51 +134,81 @@ float fbm(vec2 noisePos, int numOctaves, float startFrequency) {
     float normalizer = 0.0;
     const float PERSISTENCE = 0.5;
 
+    float frequency = startFrequency;
+    float amplitude = PERSISTENCE;
+
     for (int i = 0; i < numOctaves; i++) {
-        float frequency = pow(2.0, float(i)) * startFrequency;
-        float amplitude = pow(PERSISTENCE, float(i));
         normalizer += amplitude;
         totalNoise += brownianNoise(noisePos * frequency, SEED2) * amplitude;
+        frequency *= 2.0;
+        amplitude *= PERSISTENCE;
     }
     return totalNoise / normalizer;
 }
 
-int getBiome(float temperature, float moisture) {
-    if (temperature > 0.555 && moisture < 0.4) {
-        return 1; // Desert
-    }
-    else {
-        return 0; // Hills
-    }
+float getBiome(float temperature, float moisture) {
+    return moisture;
 }
 
-float getHeight(vec2 pos) {
-    return pow(fbm(pos, 6, 0.08), 3.0) * 10.0;
+float getMountainHeight(vec2 pos) {
+    const float MAX_AMPLITUDE = 12.0;
+    const float EXTRA_JAGGINESS = 2.0;
+    float terrainFbm = fbm(pos, 6, 0.08);
+
+    float fmbVal = terrainFbm;
+    float height = fmbVal * fmbVal * fmbVal * MAX_AMPLITUDE;
+    height = height + (mix(0.0, brownianNoise(pos, SEED2), height / MAX_AMPLITUDE)) * EXTRA_JAGGINESS;
+    return height * MAX_AMPLITUDE / (MAX_AMPLITUDE + EXTRA_JAGGINESS);
+}
+
+float getDesertHeight(vec2 pos) {
+    const float MAX_AMPLITUDE = 12.0;
+    float mesaFbm = fbm(pos, 6, 0.03);
+    float dunes = recursivePerlin(pos, 2, 0.1) * MAX_AMPLITUDE * 0.25;
+    float mesas = steepFalloff(mesaFbm, 0.7, 0.1) * MAX_AMPLITUDE;
+    return max(dunes, mesas);
+}
+
+float getOceanHeight(vec2 pos) {
+    const float MAX_AMPLITUDE = 12.0;
+    float largePerlin = recursivePerlin(pos, 2, 0.08);
+    float medPerlin = recursivePerlin(pos, 2, 0.30);
+    float islands = (1.0 - steepFalloff(largePerlin, 0.35, 0.2)) * MAX_AMPLITUDE * 0.2;
+    return MAX_AMPLITUDE * 0.09 - islands;
+}
+
+float getHeight(vec2 pos, float biome) {
+    if (biome < 0.25) {
+        return getDesertHeight(pos);
+    }
+    else if (biome >= 0.25 && biome < 0.30) {
+        return mix(getDesertHeight(pos), getMountainHeight(pos), (biome - 0.25) / 0.05);
+    }
+    else if (biome >= 0.30 && biome < 0.65) {
+        return getMountainHeight(pos);
+    }
+    else if (biome >= 0.65 && biome < 0.75) {
+        return mix(getMountainHeight(pos), getOceanHeight(pos), (biome - 0.65) / 0.1);
+    }
+    else {
+        return getOceanHeight(pos);
+    }
 }
 
 void main() {
-    /*float moisture = perlin(vs_Pos.xz + u_PlanePos, 0.01, SEED2 + vec2(0.4));
-    float temperature = perlin(vs_Pos.xz + u_PlanePos, 0.015, SEED2 + vec2(0.2));
+    fs_Moisture = quinticFalloff(perlin(vs_Pos.xz + u_PlanePos, 0.005, SEED2 + vec2(0.4)));
+    fs_Temperature = 0.0;//quinticFalloff(perlin(vs_Pos.xz + u_PlanePos, 0.015, SEED2 + vec2(0.2)));
 
-    float vertHeight = 0.0;
+    float biome = getBiome(fs_Temperature, fs_Moisture);
 
-    int biome = getBiome(temperature, moisture);
-
-    if (biome == 0) {
-        vertHeight = (pow(recursivePerlin(vs_Pos.xz + u_PlanePos, 4, 0.1), 3.0)) * MAX_AMPLITUDE;
-    }
-    else if (biome == 1) {
-        vertHeight = 0.0;
-    }*/
-    int biome = 0;
-    fs_Biome = float(biome);
-    float vertHeight = getHeight(vs_Pos.xz + u_PlanePos);
+    float vertHeight = getHeight(vs_Pos.xz + u_PlanePos, biome);
     vec4 modelposition = vec4(vs_Pos.x, vertHeight, vs_Pos.z, 1);
     fs_Pos = modelposition.xyz;
 
     modelposition = u_Model * modelposition;
     gl_Position = u_ViewProj * modelposition;
 
+    // Unfortunately, steepness calculations are too slow for my browser
     /*const float DPOS = 0.01;
     vec3 p1 = vec3(vs_Pos.x, vertHeight, vs_Pos.z);
     vec3 p2 = vec3(vs_Pos.x + DPOS, getHeight(vs_Pos.xz + vec2(DPOS, 0.0) + u_PlanePos), vs_Pos.z);

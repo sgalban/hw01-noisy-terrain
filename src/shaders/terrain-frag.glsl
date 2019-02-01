@@ -2,7 +2,7 @@
 precision highp float;
 
 uniform vec2 u_PlanePos; // Our location in the virtual world displayed by the plane
-uniform int u_Time;
+uniform highp int u_Time;
 
 in vec3 fs_Pos;
 in vec4 fs_Nor;
@@ -10,7 +10,8 @@ in vec4 fs_Col;
 
 in float fs_Sine;
 
-in float fs_Biome;
+in float fs_Temperature;
+in float fs_Moisture;
 
 out vec4 out_Col; // This is the final output color that you will see on your
                   // screen for the pixel that is currently being processed.
@@ -34,6 +35,21 @@ float quinticFalloff(float t) {
     return t * t * t * (t * (6.0 * t - 15.0) + 10.0);
 }
 
+float cubicFalloff(float t) {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float steepFalloff(float t, float falloffStart, float falloffLength) {
+    if (t < falloffStart) {
+        return 0.0;
+    }
+    else if (t > falloffStart + falloffLength){
+        return 1.0;
+    }
+    float adjusted = (t - falloffStart) / falloffLength;
+    return quinticFalloff(adjusted);
+}
+
 float perlin (vec2 noisePos, float frequency) {
     vec2 pos = noisePos * frequency;
     vec2 cellPos = vec2(floor(pos.x), floor(pos.y));
@@ -48,17 +64,17 @@ float perlin (vec2 noisePos, float frequency) {
     vec2 posVec2 = pos - corner2;
     vec2 posVec3 = pos - corner3; 
 
-    vec2 gradient0 = normalize(random2(corner0, SEED2) * (random1(corner0, SEED2) > 0.5 ? 1.0 : -1.0));
-    vec2 gradient1 = normalize(random2(corner1, SEED2) * (random1(corner1, SEED2) > 0.5 ? 1.0 : -1.0));
-    vec2 gradient2 = normalize(random2(corner2, SEED2) * (random1(corner2, SEED2) > 0.5 ? 1.0 : -1.0));
-    vec2 gradient3 = normalize(random2(corner3, SEED2) * (random1(corner3, SEED2) > 0.5 ? 1.0 : -1.0));
+    vec2 gradient0 = normalize(random2(corner0, SEED2) * 2.0 - vec2(1.0));
+    vec2 gradient1 = normalize(random2(corner1, SEED2) * 2.0 - vec2(1.0));
+    vec2 gradient2 = normalize(random2(corner2, SEED2) * 2.0 - vec2(1.0));
+    vec2 gradient3 = normalize(random2(corner3, SEED2) * 2.0 - vec2(1.0));
     float val0 = dot(posVec0, gradient0);
     float val1 = dot(posVec1, gradient1);
     float val2 = dot(posVec2, gradient2);
     float val3 = dot(posVec3, gradient3);
 
-    float tx = quinticFalloff(fract(pos.x));
-    float ty = quinticFalloff(fract(pos.y));
+    float tx = cubicFalloff(fract(pos.x));
+    float ty = cubicFalloff(fract(pos.y));
     float lerpedCol = mix(mix(val0, val1, tx), mix(val2, val3, tx), ty);
 
     return (lerpedCol + 1.0) / 2.0;
@@ -79,7 +95,7 @@ float recursivePerlin(vec2 noisePos, int octaves, float frequency) {
     return total;
 }
 
-// I tried to make this 3D, but it cut my framerate in half
+// I tried to make this 3D, but it cut my framerate in half, so I'm not doing that now
 float brownianNoise(vec2 noisePos, vec2 seed) {
     vec2 boxPos = vec2(floor(noisePos.x), floor(noisePos.y));
 
@@ -102,22 +118,43 @@ float fbm(vec2 noisePos, int numOctaves, float startFrequency) {
     float normalizer = 0.0;
     const float PERSISTENCE = 0.5;
 
+    float frequency = startFrequency;
+    float amplitude = PERSISTENCE;
+
     for (int i = 0; i < numOctaves; i++) {
-        float frequency = pow(2.0, float(i)) * startFrequency;
-        float amplitude = pow(PERSISTENCE, float(i));
         normalizer += amplitude;
         totalNoise += brownianNoise(noisePos * frequency, SEED2) * amplitude;
+        frequency *= 2.0;
+        amplitude *= PERSISTENCE;
     }
     return totalNoise / normalizer;
+}
+
+float worley(vec2 noisePos, float frequency) {
+    vec2 point = noisePos * frequency;
+    ivec2 cell = ivec2(floor(point.x), floor(point.y));
+
+    // Check the neighboring cells for the closest cell point
+    float closestDistance = 2.0;
+    vec2 closestPoint = vec2(cell) + random2(vec2(cell), SEED2);
+    for (int i = 0; i < 9; i++) {
+        ivec2 curCell = cell + ivec2(i % 3 - 1, int(floor(float(i / 3))) - 1);
+        vec2 cellPoint = vec2(curCell) + random2(vec2(curCell), SEED2);
+        float distance = distance(cellPoint, point);
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestPoint = cellPoint;
+        }
+    }
+    return clamp(0.0, 1.0, closestDistance);
 }
 
 vec3 getMountainsColor(vec3 pos) {
     float t = min(pos.y * 0.15 + ((fbm(pos.xz, 3, 0.5)) - 0.5) * 0.4, 1.0);
 
-    float largeFbm = fbm(pos.xz, 3, 0.075);
-    float smallFbm = fbm(pos.xz, 5, 5.0);
-
-    float mediumPerlin = recursivePerlin(pos.xz, 2, 1.0);
+    float largeFbm = fbm(fs_Pos.xz + u_PlanePos, 3, 0.075);
+    float smallFbm = fbm(fs_Pos.xz + u_PlanePos, 2, 5.0);
+    float mediumPerlin = recursivePerlin(fs_Pos.xz + u_PlanePos, 2, 1.0);
 
     const vec3 COL0 = vec3(0.1, 0.4, 0.07);
     const vec3 COL1 = vec3(0.3, 0.5, 0.1);
@@ -150,12 +187,110 @@ vec3 getMountainsColor(vec3 pos) {
     }
 }
 
-vec3 getBiomeColor(int biome, vec3 pos) {
-    if (biome == 0) {
+vec3 getDesertColor(vec3 pos) {
+    float mediumPerlin = recursivePerlin(pos.xz, 2, 1.0);
+    float smallPerlin = recursivePerlin(pos.xy + vec2(pos.z), 2, 2.0);
+
+    const vec3 COL1 = vec3(1.0, 0.86, 0.3);
+    const vec3 COL2 = vec3(0.92, 0.82, 0.43);
+    const vec3 COL3 = vec3(0.77, 0.48, 0.24);
+    const vec3 COL4 = vec3(0.70, 0.61, 0.34) * 1.2;
+    vec3 sandCol = mix(COL1, COL2, mediumPerlin) * (pos.y * 0.3 / 3.0 + 0.7);
+    vec3 rockCol = mix(COL3, COL4, smallPerlin);
+    vec3 topCol = mix(COL1, COL2, smallPerlin);
+
+    float t = pos.y / 12.0;
+    if (t < 0.15) {
+        return sandCol;
+    }
+    else if (t >= 0.15 && t < 0.25) {
+        return mix(sandCol, rockCol, quinticFalloff((t - 0.15) / 0.1));
+    }
+    else if (t >= 0.25 && t < 0.9) {
+        return rockCol;
+    }
+    else {
+        return mix(rockCol, topCol, quinticFalloff((t - 0.9) / 0.1));
+    }
+}
+
+vec3 getOceanColor(vec3 pos) {
+    float time = float(u_Time) * 0.01;
+    vec2 perturbenceOffset = vec2(5.4 + time, 1.3 + time);
+    vec2 worleyOffset = vec2(time);
+
+    vec2 perturbence = vec2(fbm(pos.xz, 2, 0.3), fbm(pos.xz + perturbenceOffset, 2, 0.3));
+    float worley1 = worley(pos.xz - worleyOffset - perturbence * 4.0, 0.3);
+    //float worley2 = worley(pos.xz - worleyOffset - perturbence * 6.0, 0.3); Too slow
+    float totalWorley = worley1;//(worley1 + worley2) * 0.5;
+
+    float smallPerlin = recursivePerlin(pos.xz * (pos.y + 1.0), 2, 1.0);
+    float smallFbm = fbm(pos.xz, 2, 1.0);
+
+    const vec3 COL1 = vec3(0.1, 0.3, 0.9);
+    const vec3 COL2 = vec3(0.4, 0.55, 0.95);
+    const vec3 COL3 = vec3(0.9, 0.9, 0.4);
+    const vec3 COL4 = vec3(0.85, 0.6, 0.4);
+    const vec3 COL5 = vec3(0.0, 1.0, 0.2);
+    const vec3 COL6 = vec3(0.0, 0.6, 0.1);
+
+    vec3 waterCol = mix(COL1, COL2, worley1);
+    vec3 sandCol = mix(COL3, COL4, smallPerlin);
+    vec3 grassCol = mix(COL5, COL6, smallFbm);
+
+    float tideFactor = 0.25 * (sin(time) + 1.0);
+
+    if (pos.y < - 1.0 + tideFactor) {
+        return waterCol;
+    }
+    if (pos.y >= -1.0 + tideFactor && pos.y < 0.0) {
+        return mix(waterCol, sandCol, quinticFalloff(pos.y + 1.0));
+    }
+    else if (pos.y >= 0.0 && pos.y < 0.5) {
+        return sandCol;
+    }
+    else if (pos.y >= 0.5 && pos.y < 1.5) {
+        return mix(sandCol, grassCol, cubicFalloff(pos.y - 0.5));
+    }
+    else {
+        return grassCol;
+    }
+}
+
+float getBiome(float temperature, float moisture) {
+    return moisture;
+    /*if (temperature > 0.5 && moisture < 0.5) {
+        return 1; // Desert
+    }
+    else {
+        return 0; // Hills
+    }*/
+}
+
+vec3 getBiomeColor(float biome, vec3 pos) {
+    /*if (biome == 0) {
         return getMountainsColor(pos);
     }
     if (biome == 1) {
-        return vec3(1, 1, 0);
+        return getDesertColor(pos);
+    }
+    if (biome == 2) {
+        return getOceanColor(pos);
+    }*/
+    if (biome < 0.25) {
+        return getDesertColor(pos);
+    }
+    else if (biome >= 0.25 && biome < 0.30) {
+        return mix(getDesertColor(pos), getMountainsColor(pos), (biome - 0.25) / 0.05);
+    }
+    else if (biome >= 0.30 && biome < 0.65) {
+        return getMountainsColor(pos);
+    }
+    else if (biome >= 0.65 && biome < 0.75) {
+        return mix(getMountainsColor(pos), getOceanColor(pos), (biome - 0.65) / 0.1);
+    }
+    else {
+        return getOceanColor(pos);
     }
 }
 
@@ -174,7 +309,8 @@ void main() {
     vec3 skyColor = vec3(0.64, 0.91, 1.0);
     vec3 noisePos = fs_Pos + vec3(u_PlanePos.x, 0, u_PlanePos.y);
 
-    vec3 terrainCol = getBiomeColor(int(floor(fs_Biome)), noisePos);
+    float biome = getBiome(fs_Temperature, fs_Moisture);
+    vec3 terrainCol = getBiomeColor(biome, noisePos);
     //float sunAngle = mod(float(u_Time), 360.0);
     //float lambert = getLambertianFactor(sunAngle);
     //terrainCol *= lambert;
