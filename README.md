@@ -31,10 +31,13 @@ through a simple perlin noise function and a qunitic falloff
 - "Time Multiplier" changes the rate at which time passes. This effects the color and height of the ocean, but also effects the sky color. I implemented an extremely primative day-night cycle (it only changes the color of the sky, which is still solid. I never implemented any sort of sun in my shader), which can be sped up or reversed using this parameter.
 - I did implement some simple lambertian shading to my scene. Since the vertices are altered in the shader, I had to approximate the normals by sampling the height in two additional positions close to the vertex position, and then taking a cross product. I then use the position of the sun, which is based on time (but note the sun is not actually rendered) to compute the lambertian factor per fragment. However, on my machine, this entire process is extremely slow, so I added a boolean "Lighting" parameter to disable it entirely and increase the framerate.
 
-## Sources
+## Sources Referenced
 - My worley noise implementation was copied (though slightly modified) from a version I wrote in CIS460 last semester.
 - I referred to the lecture slides for help when writing my FBM and perlin functions.
 - I used http://www.iquilezles.org/apps/graphtoy/ to help design some of my falloff functions
 - My program wouldn't run if I used an integer uniform in both by vertex and fragment shaders, so I referred to this SO post: https://stackoverflow.com/questions/22593729/accessing-same-named-uniform-in-vertex-and-fragment-shaders-fails. Once I added the highp qualifier it worked.
 - I used the DAT.GUI overview (https://workshop.chromeexperiments.com/examples/gui/#1--Basic-Usage) to refresh myself on how to develop the controls.
 - I used Inigo Quilez's article on domain warping (https://www.iquilezles.org/www/articles/warp/warp.htm) to help with my water animation.
+
+## Deployment
+https://sgalban.github.io/hw01-noisy-terrain/
